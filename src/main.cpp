@@ -49,7 +49,7 @@
 namespace afpackettest {
 
 // define all options
-std::string flag_iface = "eth0";
+std::string flag_iface = "wlp61s0";
 int32_t flag_threads = 1;
 uint16_t flag_fanout_type = PACKET_FANOUT_LB | PACKET_FANOUT_FLAG_ROLLOVER;
 uint16_t flag_fanout_id = 0;
@@ -58,8 +58,42 @@ int32_t flag_blocks = 2048;
 int64_t flag_blockage_sec = 10;
 bool flag_promisc = true;
 
+Error SetAffinity(int cpu) {
+  cpu_set_t cpus;
+  CPU_ZERO(&cpus);
+  CPU_SET(cpu, &cpus);
+  return Errno(sched_setaffinity(0, sizeof(cpus), &cpus));
+}
 
-//usr/include/
+void RunThread(int thread, Packets* v3) {
+  if (flag_threads > 1) {
+    LOG_IF_ERROR(SetAffinity(thread), "set affinity");
+  }
+
+  LOG(INFO) << "Thread " << thread << " starting to process packets";
+
+  Packet p;
+  int64_t blocks = 0;
+  int64_t block_offset = 0;
+  for (int64_t remaining = -1; remaining != 0;) {
+    // Read in a new block from AF_PACKET.
+    Block b;
+    CHECK_SUCCESS(v3->NextBlock(&b, 1000));
+    if (b.Empty()) {
+      continue;
+    }
+
+    // Index all packets if necessary.
+    for (; remaining != 0 && b.Next(&p); remaining--) {
+      //index->Process(p, block_offset * flag_blocksize_kb * 1024);
+    }
+    blocks++;
+    block_offset++;
+  }
+
+  LOG(INFO) << "Finished thread " << thread << " successfully";
+}
+
 int Main(int argc, char** argv) {
   //std::cout << "Starting afpacket test" << std::endl;
   VLOG(1) << "Starting afpacket test";
@@ -101,9 +135,28 @@ int Main(int argc, char** argv) {
       CHECK_SUCCESS(builder.SetFanout(flag_fanout_type, fanout_id));
     }
 
+    Packets* v3;
+    CHECK_SUCCESS(builder.Bind(flag_iface, &v3));
+    sockets.push_back(v3);
+
   }
 
-  //std::cout << "Finished afpacket test" << std::endl;
+  VLOG(1) << "Starting writing threads";
+  std::vector<std::thread*> threads;
+  for (int i = 0; i < flag_threads; i++) {
+    VLOG(1) << "Starting thread " << i;
+    threads.push_back(new std::thread(&RunThread, i, sockets[i]));
+  }
+
+  for (auto thread : threads) {
+    VLOG(1) << "===============Waiting for thread==============";
+    CHECK(thread->joinable());
+    thread->join();
+    VLOG(1) << "Thread finished";
+    delete thread;
+  }
+
+  LOG(INFO) << "Process exiting successfully";
 
   return 0;
 
