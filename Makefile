@@ -2,6 +2,6 @@
 .PHONY: build run
 
 build:
-	docker build --no-cache -t afpacket .
+	docker build -t afpacket .
 run: build
-	docker run -it afpacket bash
+	docker run --cap-add NET_RAW --cap-add NET_ADMIN --cap-add IPC_LOCK -it --network host -v ${PWD}/src/:/src/ afpacket bash

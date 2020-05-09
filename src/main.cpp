@@ -1,30 +1,115 @@
 /* 
-Process must have CAP_NET_RAW
+ * Copyright 2020 Berry den Hartog. All rights reserved.
+ *
+ * Process must have CAP_NET_RAW
+ * 
+ * AF-Packet test, based on google stenotype
+ *
+ * this test is a mechanism for quickly reading raw packets. 
+ *
+ * NIC -> RAM
+ * this test uses MMAP'd AF_PACKET with 1MB blocks and a high timeout to offload
+ * analyzing packets.  The kernel packs all the packets it can into 1MB, then 
+ * lets the userspace process know there's a block available in the MMAP'd ring 
+ * buffer.  Nicely, it guarantees no overruns (packets crossing the 1MB boundary) 
+ * and good alignment to memory pages.
+ *
+ * tested on Linux kernel: 5.3.0-42-generic
+ */
 
-Simple program to test AF-Packet
+#include <errno.h>            // errno
+#include <fcntl.h>            // O_*
+#include <grp.h>              // getgrnam()
+#include <linux/if_packet.h>  // AF_PACKET, sockaddr_ll
+#include <poll.h>             // POLLIN
+#include <pthread.h>          // pthread_sigmask()
+#include <pwd.h>              // getpwnam()
+#include <sched.h>            // sched_setaffinity()
+#include <signal.h>           // sigaction(), SIGINT, SIGTERM
+#include <string.h>           // strerror()
+#include <sys/prctl.h>        // prctl(), PR_SET_*
+#include <sys/resource.h>     // setpriority(), PRIO_PROCESS
+#include <sys/socket.h>       // socket()
+#include <sys/stat.h>         // umask()
+#include <sys/syscall.h>      // syscall(), SYS_gettid
+#include <unistd.h>           // setuid(), setgid(), getpagesize()
+#include <assert.h>           // assert()
 
-Linux kernel: 5.3.0-42-generic
-*/
+#include <string>
+#include <sstream>
+#include <thread>
+#include <iostream>
 
-#include "AF_Packet.h"
+#include <argp.h>             // argp_parse()
 
-int main (int argc, char *argv[]) { 
-    // 1. A socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL)) is created.
-    socket_fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-    if ( socket_fd < 0 ) {
-		Error(errno ? strerror(errno) : "unable to create socket");
-		return;
-	}
+#include "util.h"
+#include "index.h"
+#include "packets.h"
+
+namespace afpackettest {
+
+// define all options
+std::string flag_iface = "eth0";
+int32_t flag_threads = 1;
+uint16_t flag_fanout_type = PACKET_FANOUT_LB | PACKET_FANOUT_FLAG_ROLLOVER;
+uint16_t flag_fanout_id = 0;
+uint64_t flag_blocksize_kb = 1024;
+int32_t flag_blocks = 2048;
+int64_t flag_blockage_sec = 10;
+bool flag_promisc = true;
+
+
+//usr/include/
+int Main(int argc, char** argv) {
+  //std::cout << "Starting afpacket test" << std::endl;
+  VLOG(1) << "Starting afpacket test";
+ 
+
+  VLOG(1) << "afpacket test running with these arguments:";
+  for (int i = 0; i < argc; i++) {
+    VLOG(1) << i << ":\t\"" << argv[i] << "\"";
+  }
+  LOG(INFO) << "Starting, page size is " << getpagesize();
+
+  CHECK(flag_threads >= 1);
+  CHECK(flag_blockage_sec > 0);
+  CHECK(flag_blocks >= 16);
+  CHECK(flag_blocksize_kb >= 10);
+  CHECK(flag_blocksize_kb * 1024 >= (uint64_t)(getpagesize()));
+  CHECK(flag_blocksize_kb * 1024 % (uint64_t)(getpagesize()) == 0);
+
+  std::vector<Packets*> sockets;
+  for (int i = 0; i < flag_threads; i++) {
+    LOG(INFO) << "Setting up AF_PACKET sockets for packet reading";
+    int socktype = SOCK_RAW;
+    struct tpacket_req3 options;
+    memset(&options, 0, sizeof(options));
+    options.tp_block_size = flag_blocksize_kb * 1024;
+    options.tp_block_nr = flag_blocks;
+    options.tp_frame_size = flag_blocksize_kb * 1024;  // doesn't matter
+    options.tp_frame_nr = 0;                           // computed for us.
+    options.tp_retire_blk_tov = flag_blockage_sec * 1000 - 1;
+
+    PacketsV3::Builder builder;
+    CHECK_SUCCESS(builder.SetUp(socktype, options));
+    CHECK_SUCCESS(builder.SetPromisc(flag_promisc));
+    int fanout_id = getpid();
+    if (flag_fanout_id > 0) {
+      fanout_id = flag_fanout_id;
+    }
+    if (flag_fanout_id > 0 || flag_threads > 1) {
+      CHECK_SUCCESS(builder.SetFanout(flag_fanout_type, fanout_id));
+    }
+
+  }
+
+  //std::cout << "Finished afpacket test" << std::endl;
+
+  return 0;
+
 }
 
-
-// 2. The socket is bound to the eth0 interface.
-
-
-// 3. Ring buffer version is set to TPACKET_V2 via the PACKET_VERSION socket option.
+} // end namespace
 
 
-// 4. A ring buffer is created via the PACKET_RX_RING socket option.
-
-
-// 5. The ring buffer is mmapped in the userspace
+int main(int argc, char** argv) { return afpackettest::Main(argc, argv); }

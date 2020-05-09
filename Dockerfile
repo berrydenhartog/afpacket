@@ -5,10 +5,18 @@ COPY src /src/
 
 RUN apt-get update && apt-get install -y \
   cmake \
-  build-essential \
- && rm -rf /var/lib/apt/lists/*
+  g++ \
+  gdb \
+  valgrind \
+  libcap2-bin  \
+  libleveldb-dev
+# && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build/
-RUN cmake /src/ && make
+RUN cmake /src/ 
+#RUN make
+#RUN setcap 'CAP_NET_RAW+ep CAP_NET_ADMIN+ep CAP_IPC_LOCK+ep' /build/afpacket_test.exe
 
-CMD [ "/build/af_packet.exe"]
+# RUN valgrind /build/afpacket_test.exe
+
+CMD [ "/build/afpacket_test.exe"]
