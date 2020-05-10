@@ -34,6 +34,8 @@
 #include <sys/syscall.h>      // syscall(), SYS_gettid
 #include <unistd.h>           // setuid(), setgid(), getpagesize()
 #include <assert.h>           // assert()
+#include <map>
+#include <vector>
 
 #include <string>
 #include <sstream>
@@ -43,7 +45,6 @@
 #include <argp.h>             // argp_parse()
 
 #include "util.h"
-#include "index.h"
 #include "packets.h"
 
 namespace afpackettest {
